@@ -39,6 +39,7 @@ def clear_error(func):
     def wrapper(*args, **kwargs):
         args[0].last_error = None
         return func(*args, **kwargs)
+
     return wrapper
 
 
@@ -47,8 +48,38 @@ class CurrencyConverter:
     REQUEST_RATES = 'https://www.nbrb.by/api/exrates/rates'
     REQUEST_DYNAMICS = 'https://www.nbrb.by/api/exrates/rates/dynamics'
 
+    DATE_LONG = '%Y-%m-%dT%H:%M:%S'
+    DATE_SHORT = '%Y-%m-%d'
+
     def __init__(self):
         self.last_error = None
+
+    @staticmethod
+    def _check_val_code(val):
+        """Check the currency code is correct."""
+        if isinstance(val, str):
+            return (len(val) == 3) and val.isalpha()
+        return False
+
+    @staticmethod
+    def _date_to_str(date, to_format):
+        """Convert date to string."""
+        date_string = None
+        try:
+            date_string = date.strftime(to_format)
+        except TypeError:
+            pass
+        return date_string
+
+    @staticmethod
+    def _date_from_str(date_string, from_format):
+        """Convert string to date."""
+        date = None
+        try:
+            date = dt.strptime(date_string, from_format)
+        except ValueError:
+            pass
+        return date
 
     @staticmethod
     def _make_request(request, params=None):
@@ -72,10 +103,26 @@ class CurrencyConverter:
                end_date - the end of period in format 'YYYY-MM-DD'
         """
         if val.upper() == 'BYN':
+            self.last_error = ''
             return
 
-        beg_period = dt.strptime(start_date, '%Y-%m-%d')
-        end_period = dt.strptime(end_date, '%Y-%m-%d')
+        if not self._check_val_code(val):
+            self.last_error = f'The currency code "{val}" is incorrect'
+            return
+
+        beg_period = self._date_from_str(start_date, self.DATE_SHORT)
+        end_period = self._date_from_str(end_date, self.DATE_SHORT)
+
+        if not beg_period:
+            self.last_error = f'The date "{start_date}" is incorrect'
+            return
+
+        if not end_period:
+            self.last_error = f'The date "{end_date}" is incorrect'
+            return
+
+        if beg_period > end_period:
+            beg_period, end_period = end_period, beg_period
 
         response, error = self._make_request(self.REQUEST_CURRENCIES)
         if error:
@@ -83,28 +130,33 @@ class CurrencyConverter:
             return
 
         vals = [{'Cur_ID': res.get('Cur_ID'),
-                 'Cur_DateStart': dt.strptime(res.get('Cur_DateStart'), '%Y-%m-%dT%H:%M:%S'),
-                 'Cur_DateEnd': dt.strptime(res.get('Cur_DateEnd'), '%Y-%m-%dT%H:%M:%S')}
+                 'Cur_DateStart': self._date_from_str(res.get('Cur_DateStart'), self.DATE_LONG),
+                 'Cur_DateEnd': self._date_from_str(res.get('Cur_DateEnd'), self.DATE_LONG)}
                 for res in response if res.get('Cur_Abbreviation', '') == val.upper()]
-        filter_period = (lambda x: x['Cur_DateStart'] <= beg_period <= x['Cur_DateEnd'] or
-                         x['Cur_DateStart'] <= end_period <= x['Cur_DateEnd'])
+        filter_period = (lambda x: (x['Cur_DateStart'] and x['Cur_DateEnd'] and
+                                    (x['Cur_DateStart'] <= beg_period <= x['Cur_DateEnd'] or
+                                     x['Cur_DateStart'] <= end_period <= x['Cur_DateEnd'])))
         vals = list(filter(filter_period, vals))
 
         if len(vals) == 0:
-            self.last_error = f'Currency "{val.upper()}" not found'
+            self.last_error = f'The currency "{val.upper()}" not found'
             return
 
         rates = {}
-        for item in vals:
-            val_code = item.get('Cur_ID')
-            params = {'startdate': max([beg_period, item.get('Cur_DateStart')]).strftime('%Y-%m-%d'),
-                      'enddate': min([end_period, item.get('Cur_DateEnd')]).strftime('%Y-%m-%d')}
+        for v in vals:
+            val_code = v.get('Cur_ID')
+            params = {'startdate': self._date_to_str(max([beg_period, v.get('Cur_DateStart')]), self.DATE_SHORT),
+                      'enddate': self._date_to_str(min([end_period, v.get('Cur_DateEnd')]), self.DATE_SHORT)}
             response, error = self._make_request(f'{self.REQUEST_DYNAMICS}/{val_code}', params)
             if error:
                 self.last_error = str(error)
                 return
-            rates.update({dt.strptime(rate.get('Date'), '%Y-%m-%dT%H:%M:%S'): rate.get('Cur_OfficialRate')
+            rates.update({self._date_from_str(rate.get('Date'), self.DATE_LONG): rate.get('Cur_OfficialRate')
                           for rate in response})
+
+        if len(rates) == 0:
+            self.last_error = f'The rates for currency "{val.upper()}" not found'
+            return
 
         plt.style.use('seaborn')
         fig, ax = plt.subplots()
@@ -127,9 +179,17 @@ class CurrencyConverter:
         if val.upper() == 'BYN':
             return 1.0, 1.0
 
+        if not self._check_val_code(val):
+            self.last_error = f'The currency code "{val}" is incorrect'
+            return 1.0, 0.0
+
         params = {'parammode': 2}
         if date:
+            if not self._date_from_str(date, self.DATE_SHORT):
+                self.last_error = f'The date "{date}" is incorrect'
+                return 1.0, 0.0
             params['ondate'] = date
+
         response, error = self._make_request(f'{self.REQUEST_RATES}/{val.upper()}', params)
         if error:
             self.last_error = str(error)
@@ -149,6 +209,14 @@ class CurrencyConverter:
         if from_val.upper() == to_val.upper():
             return summa
 
+        if not self._check_val_code(from_val):
+            self.last_error = f'The currency code "{from_val}" is incorrect'
+            return 0.0
+
+        if not self._check_val_code(to_val):
+            self.last_error = f'The currency code "{to_val}" is incorrect'
+            return 0.0
+
         summa_in_byn = summa
         if from_val.upper() != "BYN":
             rate = self.get_rate(from_val, date)
@@ -162,7 +230,7 @@ class CurrencyConverter:
         return summa_in_byn / rate[1] * rate[0]
 
 
-def _get_args(argv):
+def get_args(argv):
     """Parsing command-line arguments."""
     parser = argparse.ArgumentParser(prog='converter.py', description='Python command-line currency converter')
     parser.add_argument('--version', action='version', version='"Version {version}"'.format(version=__version__),
@@ -182,7 +250,7 @@ def _get_args(argv):
 
 
 def main():
-    args = _get_args(sys.argv)
+    args = get_args(sys.argv)
     c = CurrencyConverter()
     if args.plot:
         c.make_plot(args.currency, args.date[0], args.date[1])
