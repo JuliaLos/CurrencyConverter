@@ -67,7 +67,7 @@ class CurrencyConverter:
         date_string = None
         try:
             date_string = date.strftime(to_format)
-        except TypeError:
+        except (TypeError, ValueError):
             pass
         return date_string
 
@@ -77,7 +77,7 @@ class CurrencyConverter:
         date = None
         try:
             date = dt.strptime(date_string, from_format)
-        except ValueError:
+        except (TypeError, ValueError):
             pass
         return date
 
@@ -176,12 +176,12 @@ class CurrencyConverter:
                date - the date in format 'YYYY-MM-DD'
             It returns a tuple with currency scale and rate.
         """
-        if val.upper() == 'BYN':
-            return 1.0, 1.0
-
         if not self._check_val_code(val):
             self.last_error = f'The currency code "{val}" is incorrect'
             return 1.0, 0.0
+
+        if val.upper() == 'BYN':
+            return 1.0, 1.0
 
         params = {'parammode': 2}
         if date:
@@ -194,6 +194,11 @@ class CurrencyConverter:
         if error:
             self.last_error = str(error)
             return 1.0, 0.0
+
+        if len(response) == 0:
+            self.last_error = f'The rate for currency "{val.upper()}" not found'
+            return 1.0, 0.0
+
         return response.get('Cur_Scale', 1.0), response.get('Cur_OfficialRate', 0.0)
 
     @clear_error
@@ -206,8 +211,9 @@ class CurrencyConverter:
                 date - the date in format 'YYYY-MM-DD'
             It returns a summa in the target currency.
         """
-        if from_val.upper() == to_val.upper():
-            return summa
+        if not isinstance(summa, (int, float)):
+            self.last_error = f'The summa "{summa}" is incorrect'
+            return 0.0
 
         if not self._check_val_code(from_val):
             self.last_error = f'The currency code "{from_val}" is incorrect'
@@ -217,17 +223,20 @@ class CurrencyConverter:
             self.last_error = f'The currency code "{to_val}" is incorrect'
             return 0.0
 
+        if from_val.upper() == to_val.upper():
+            return summa
+
         summa_in_byn = summa
-        if from_val.upper() != "BYN":
+        if from_val.upper() != 'BYN':
             rate = self.get_rate(from_val, date)
             if self.last_error:
                 return 0.0
-            summa_in_byn = summa / rate[0] * rate[1]
+            summa_in_byn = summa / rate[0] * rate[1] if rate[0] != 0 else 0.0
 
         rate = self.get_rate(to_val, date)
         if self.last_error:
             return 0.0
-        return summa_in_byn / rate[1] * rate[0]
+        return summa_in_byn / rate[1] * rate[0] if rate[1] != 0 else 0.0
 
 
 def get_args(argv):
