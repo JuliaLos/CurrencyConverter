@@ -5,8 +5,37 @@ import requests_mock
 
 from contextlib import nullcontext
 from converter.converter import CurrencyConverter, get_args
+from datetime import datetime
 from io import StringIO
 from unittest import mock
+
+TEST_DATA_RATE_1 = {'Cur_Scale': 1.0,
+                    'Cur_OfficialRate': 2.0,
+                    }
+TEST_DATA_RATE_2 = {'Cur_Scale': 10.0,
+                    'Cur_OfficialRate': 2.0,
+                    }
+TEST_DATA_VAL_1 = [{'Cur_ID': 159,
+                    'Cur_Scale': 1.0,
+                    'Cur_Abbreviation': 'USD',
+                    'Cur_DateStart': '2020-01-01T00:00:00',
+                    'Cur_DateEnd': '2050-01-01T00:00:00',
+                    }]
+TEST_DATA_VAL_2 = [{'Cur_ID': 159,
+                    'Cur_Scale': 10.0,
+                    'Cur_Abbreviation': 'USD',
+                    'Cur_DateStart': '2020-01-01T00:00:00',
+                    'Cur_DateEnd': '2050-01-01T00:00:00',
+                    }]
+TEST_DATA_DYN_1 = [{'Date': '2022-02-14T00:00:00',
+                    'Cur_OfficialRate': 2.0,
+                    }]
+TEST_DATA_DYN_2 = [{'Date': '2022-02-01T00:00:00',
+                    'Cur_OfficialRate': 2.0,
+                    },
+                   {'Date': '2022-02-14T00:00:00',
+                    'Cur_OfficialRate': 2.5,
+                    }]
 
 
 @pytest.mark.parametrize(
@@ -71,18 +100,19 @@ def test_make_request(params, exception):
 @pytest.mark.parametrize(
     "args,params,expected",
     [
-        (['usd'], {'json': {'Cur_Scale': 1.0, 'Cur_OfficialRate': 2.0}}, [(1.0, 2.0)]),
-        (['usd', '2022-02-14'], {'json': {'Cur_Scale': 10.0, 'Cur_OfficialRate': 2.0}}, [(10.0, 2.0)]),
-        ([100.0, 200.0], {'json': {'Cur_Scale': 1.0, 'Cur_OfficialRate': 2.0}}, [(1.0, 0.0)]),
-        (['100', 'date'], {'json': {'Cur_Scale': 10.0, 'Cur_OfficialRate': 2.0}}, [(1.0, 0.0)]),
-        ([100, 'usd'], {'json': {}}, [(1.0, 0.0)]),
+        (['usd'], TEST_DATA_RATE_1, (1.0, 2.0)),
+        (['usd', '2022-02-14'], TEST_DATA_RATE_2, (10.0, 2.0)),
+        ([100.0, 200.0], TEST_DATA_RATE_1, (1.0, 0.0)),
+        (['100', 'date'], TEST_DATA_RATE_2, (1.0, 0.0)),
+        ([None, None], TEST_DATA_RATE_1, (1.0, 0.0)),
+        ([100, 'usd'], {}, (1.0, 0.0)),
     ],
 )
 def test_get_rate(args, params, expected):
     with requests_mock.Mocker() as m:
-        m.get(f'{CurrencyConverter.REQUEST_RATES}/USD?parammode=2', **params)
+        m.get(f'{CurrencyConverter.REQUEST_RATES}/USD?parammode=2', json=params)
         try:
-            assert CurrencyConverter().get_rate(*args) == expected[0]
+            assert CurrencyConverter().get_rate(*args) == expected
         except Exception as e:
             assert False, f'function get_rate() raised an exception: {e}'
 
@@ -90,21 +120,52 @@ def test_get_rate(args, params, expected):
 @pytest.mark.parametrize(
     "args,params,expected",
     [
-        ([100, 'usd'], {'json': {'Cur_Scale': 1.0, 'Cur_OfficialRate': 2.0}}, [200.0]),
-        ([100.0, 'usd', 'byn', '2022-02-14'], {'json': {'Cur_Scale': 10.0, 'Cur_OfficialRate': 2.0}}, [20.0]),
-        ([100.0, 'byn', 'usd', '2022-02-14'], {'json': {'Cur_Scale': 1.0, 'Cur_OfficialRate': 2.0}}, [50.0]),
-        (['100', 'usd', 'byn', '2022-02-14'], {'json': {'Cur_Scale': 10.0, 'Cur_OfficialRate': 2.0}}, [0.0]),
-        ([100, 200, 300, 400], {'json': {'Cur_Scale': 1.0, 'Cur_OfficialRate': 1.0}}, [0.0]),
-        ([100, '200', 'date'], {'json': {'Cur_Scale': 10.0, 'Cur_OfficialRate': 1.0}}, [0.0]),
-        ([100, 'byn', 'usd'], {'json': {}}, [0.0]),
-        ([100, 'usd'], {'json': {}}, [0.0]),
+        ([100, 'usd'], TEST_DATA_RATE_1, [200.0]),
+        ([100.0, 'usd', 'byn', '2022-02-14'], TEST_DATA_RATE_2, [20.0]),
+        ([100.0, 'byn', 'usd', '2022-02-14'], TEST_DATA_RATE_1, [50.0]),
+        (['100', 'usd', 'byn', '2022-02-14'], TEST_DATA_RATE_2, [0.0]),
+        ([100, 200, 300, 400], TEST_DATA_RATE_1, [0.0]),
+        ([100, '200', 'date'], TEST_DATA_RATE_2, [0.0]),
+        ([None, None, None], TEST_DATA_RATE_1, [0.0]),
+        ([100, 'byn', 'usd'], {}, [0.0]),
+        ([100, 'usd'], {}, [0.0]),
     ],
 )
 def test_convert(args, params, expected):
     with requests_mock.Mocker() as m:
-        m.get(f'{CurrencyConverter.REQUEST_RATES}/USD?parammode=2', **params)
+        m.get(f'{CurrencyConverter.REQUEST_RATES}/USD?parammode=2', json=params)
         try:
             assert CurrencyConverter().convert(*args) == expected[0]
         except Exception as e:
             assert False, f'function convert() raised an exception: {e}'
 
+
+@pytest.mark.parametrize(
+    "args,params1,params2,expected",
+    [
+        (['usd', '2022-02-01', '2022-02-14'], TEST_DATA_VAL_1, TEST_DATA_DYN_1,
+         (1.0,
+          {datetime(2022, 2, 14, 0, 0): 2.0})
+         ),
+        (['usd', '2022-02-14', '2022-02-01'], TEST_DATA_VAL_2, TEST_DATA_DYN_2,
+         (10.0,
+          {datetime(2022, 2, 1, 0, 0): 2.0,
+           datetime(2022, 2, 14, 0, 0): 2.5})
+         ),
+        (['usd', '2020-02-01', '2022-02-01'], TEST_DATA_VAL_1, TEST_DATA_DYN_1, (1.0, {})),
+        (['100', '2022-02-01', '2022-02-14'], TEST_DATA_VAL_2, TEST_DATA_DYN_2, (1.0, {})),
+        ([100, 200, 300], TEST_DATA_VAL_1, TEST_DATA_DYN_1, (1.0, {})),
+        (['usd', 'date', 'date'], TEST_DATA_VAL_2, TEST_DATA_DYN_2, (1.0, {})),
+        ([None, None, None], TEST_DATA_VAL_1, TEST_DATA_DYN_1, (1.0, {})),
+        (['usd', '2022-02-01', '2022-02-14'], [], TEST_DATA_DYN_2, (1.0, {})),
+        (['usd', '2022-02-01', '2022-02-14'], TEST_DATA_VAL_1, [], (1.0, {})),
+    ],
+)
+def test_get_rate_dynamics(args, params1, params2, expected):
+    with requests_mock.Mocker() as m:
+        m.get(CurrencyConverter.REQUEST_CURRENCIES, json=params1)
+        m.get(f'{CurrencyConverter.REQUEST_DYNAMICS}/159', json=params2)
+        try:
+            assert CurrencyConverter().get_rate_dynamics(*args) == expected
+        except Exception as e:
+            assert False, f'function get_rate_dynamics() raised an exception: {e}'

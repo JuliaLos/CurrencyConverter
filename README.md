@@ -19,7 +19,7 @@ _Optional arguments:_
     --version    print version info
     --date DATE  the date for rate or the period for plot (in format "YYYY-MM-DD")
     --rate       print the rate on the date
-    --plot       make a plot of the rate dynamics for the period
+    --plot       make a plot of the rate dynamics for the period (no more than 365 days)
 
 ## Python API
 

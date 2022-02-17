@@ -5,7 +5,7 @@
 This module is a currency converter that uses data from the National Bank of the Republic of Belarus
 (https://www.nbrb.by).
 
-To convert summa or get rates use the following command:
+It can be used as Command line tool. In this case, to convert summa or get rates use the following command:
   converter.py [-h] [--version] [--date DATE] [--rate] [--plot] [summa] currency
 
 Positional arguments:
@@ -18,7 +18,7 @@ Optional arguments:
   --version    print version info
   --date DATE  the date for rate or the period for plot (in format "YYYY-MM-DD")
   --rate       print the rate on the date
-  --plot       make a plot of the rate dynamics for the period
+  --plot       make a plot of the rate dynamics for the period (no more than 365 days)
 
 """
 
@@ -95,41 +95,47 @@ class CurrencyConverter:
             return response, error
 
     @clear_error
-    def make_plot(self, val, start_date, end_date):
-        """ This function makes a plot of the rate dynamics over the period.
+    def get_rate_dynamics(self, val, start_date, end_date):
+        """ This function finds rate of currency in BYN for the period.
             It receives:
                val - the currency code
                start_date - the beginning of period in format 'YYYY-MM-DD'
                end_date - the end of period in format 'YYYY-MM-DD'
+            It returns a tuple with currency scale and dictionary with rates for the period.
         """
-        if val.upper() == 'BYN':
-            self.last_error = ''
-            return
-
         if not self._check_val_code(val):
             self.last_error = f'The currency code "{val}" is incorrect'
-            return
+            return 1.0, {}
+
+        if val.upper() == 'BYN':
+            self.last_error = ''
+            return 1.0, {}
 
         beg_period = self._date_from_str(start_date, self.DATE_SHORT)
         end_period = self._date_from_str(end_date, self.DATE_SHORT)
 
         if not beg_period:
             self.last_error = f'The date "{start_date}" is incorrect'
-            return
+            return 1.0, {}
 
         if not end_period:
             self.last_error = f'The date "{end_date}" is incorrect'
-            return
+            return 1.0, {}
 
         if beg_period > end_period:
             beg_period, end_period = end_period, beg_period
 
+        if (end_period - beg_period).days > 365:
+            self.last_error = f'The period from {beg_period:%Y-%m-%d} to {end_period:%Y-%m-%d}" is more than 365 days'
+            return 1.0, {}
+
         response, error = self._make_request(self.REQUEST_CURRENCIES)
         if error:
             self.last_error = str(error)
-            return
+            return 1.0, {}
 
         vals = [{'Cur_ID': res.get('Cur_ID'),
+                 'Cur_Scale': res.get('Cur_Scale', 1.0),
                  'Cur_DateStart': self._date_from_str(res.get('Cur_DateStart'), self.DATE_LONG),
                  'Cur_DateEnd': self._date_from_str(res.get('Cur_DateEnd'), self.DATE_LONG)}
                 for res in response if res.get('Cur_Abbreviation', '') == val.upper()]
@@ -140,9 +146,11 @@ class CurrencyConverter:
 
         if len(vals) == 0:
             self.last_error = f'The currency "{val.upper()}" not found'
-            return
+            return 1.0, {}
 
         rates = {}
+        scale = sorted(vals, key=lambda x: (x['Cur_DateStart'], x['Cur_DateEnd']))[-1]['Cur_Scale']
+
         for v in vals:
             val_code = v.get('Cur_ID')
             params = {'startdate': self._date_to_str(max([beg_period, v.get('Cur_DateStart')]), self.DATE_SHORT),
@@ -150,19 +158,34 @@ class CurrencyConverter:
             response, error = self._make_request(f'{self.REQUEST_DYNAMICS}/{val_code}', params)
             if error:
                 self.last_error = str(error)
-                return
-            rates.update({self._date_from_str(rate.get('Date'), self.DATE_LONG): rate.get('Cur_OfficialRate')
+                return {}
+            rates.update({self._date_from_str(rate.get('Date'), self.DATE_LONG): (rate.get('Cur_OfficialRate') *
+                                                                                  scale / v.get('Cur_Scale'))
                           for rate in response})
 
         if len(rates) == 0:
             self.last_error = f'The rates for currency "{val.upper()}" not found'
+            return 1.0, {}
+
+        return scale, rates
+
+    @clear_error
+    def make_plot(self, val, start_date, end_date):
+        """ This function makes a plot of the rate dynamics for the period.
+            It receives:
+               val - the currency code
+               start_date - the beginning of period in format 'YYYY-MM-DD'
+               end_date - the end of period in format 'YYYY-MM-DD'
+        """
+        scale, rates = self.get_rate_dynamics(val, start_date, end_date)
+        if len(rates) == 0:
             return
 
         plt.style.use('seaborn')
         fig, ax = plt.subplots()
-        ax.set_title('The rate dynamics')
-        ax.set_ylabel('Rates (BYN)')
-        ax.plot(rates.keys(), rates.values(), '-o', label=val.upper())
+        fig.canvas.manager.set_window_title('The rate dynamics')
+        ax.set_title(f'The rates of {scale:.0f} {val.upper()} in BYN')
+        ax.plot(rates.keys(), rates.values(), '-o', label=f'{scale:.0f} {val.upper()}')
         fig.autofmt_xdate()
         ax.autoscale()
         ax.legend()
