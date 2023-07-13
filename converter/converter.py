@@ -44,9 +44,9 @@ def clear_error(func):
 
 
 class CurrencyConverter:
-    REQUEST_CURRENCIES = 'https://www.nbrb.by/api/exrates/currencies'
-    REQUEST_RATES = 'https://www.nbrb.by/api/exrates/rates'
-    REQUEST_DYNAMICS = 'https://www.nbrb.by/api/exrates/rates/dynamics'
+    REQUEST_CURRENCIES = 'https://api.nbrb.by/exrates/currencies'
+    REQUEST_RATES = 'https://api.nbrb.by/exrates/rates'
+    REQUEST_DYNAMICS = 'https://api.nbrb.by/exrates/rates/dynamics'
 
     DATE_LONG = '%Y-%m-%dT%H:%M:%S'
     DATE_SHORT = '%Y-%m-%d'
